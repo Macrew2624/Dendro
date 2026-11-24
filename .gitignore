@@ -1,0 +1,14 @@
+# Build output
+/dendro
+*.o
+
+# Sanitizer and debugger artifacts
+*.dSYM/
+core
+vgcore.*
+
+# Editor files
+.vscode/
+.idea/
+*~
+*.swp
