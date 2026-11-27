@@ -6,10 +6,13 @@ SRC    = src/main.c
 $(TARGET): $(SRC)
 	$(CC) $(CFLAGS) $(SRC) -o $@
 
-debug: CFLAGS += -fsanitize=adress,undefined
+debug: CFLAGS += -fsanitize=address,undefined
 debug: clean $(TARGET)
 
 clean:
 	rm -f $(TARGET)
+
+test: $(TARGET)
+	sh tests/run.sh
 
 .PHONY: debug clean

@@ -1,6 +1,8 @@
 #include <dirent.h>
 #include <errno.h>
 #include <limits.h>
+#include <linux/limits.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,9 +25,23 @@ struct args {
   int all, dirs_only, max_depth;
 };
 
+void build_path(char *out, size_t size, const char *dir, const char *name) {
+  size_t n = strlen(dir);
+  snprintf(out, size, "%s%s%s", dir, (n > 0 && dir[n - 1] == '/') ? "" : "/",
+           name);
+}
+
 int is_dir(const char *path) {
   struct stat s;
   if (lstat(path, &s) == -1) {
+    return 0;
+  }
+  return S_ISDIR(s.st_mode);
+}
+
+int points_to_dir(const char *path) {
+  struct stat s;
+  if (stat(path, &s) == -1) {
     return 0;
   }
   return S_ISDIR(s.st_mode);
@@ -91,8 +107,8 @@ void list_dir(const char *path, const char *prefix, struct counter *C,
       return;
     }
 
-    snprintf(full_path, sizeof(full_path), "%s/%s", path, next_dir->d_name);
-    if (A.dirs_only && !is_dir(full_path)) {
+    build_path(full_path, sizeof(full_path), path, next_dir->d_name);
+    if (A.dirs_only && !points_to_dir(full_path)) {
       next_dir = readdir(stream);
       continue;
     }
@@ -115,10 +131,38 @@ void list_dir(const char *path, const char *prefix, struct counter *C,
 
   closedir(stream);
 
-  qsort(T.names, T.size, sizeof(char *), compare);
+  if (T.size > 1) {
+    qsort(T.names, T.size, sizeof(char *), compare);
+  }
 
   for (int i = 0; i < T.size; i++) {
-    snprintf(full_path, sizeof(full_path), "%s/%s", path, T.names[i]);
+    build_path(full_path, sizeof(full_path), path, T.names[i]);
+
+    int dir = is_dir(full_path);
+    struct args child = A;
+    if (child.max_depth > 0) {
+      child.max_depth--;
+    }
+
+    char target[PATH_MAX];
+    ssize_t n = -1;
+    if (!dir) {
+      n = readlink(full_path, target, sizeof(target) - 1);
+      if (n != -1) {
+        target[n] = '\0';
+      }
+    }
+
+    int unreadable = 0;
+    if (dir && child.max_depth != 0) {
+      DIR *probe = opendir(full_path);
+      if (probe == NULL) {
+        unreadable = 1;
+      } else {
+        closedir(probe);
+      }
+    }
+
     snprintf(full_prefix, sizeof(full_prefix), "%s%s", prefix,
              i == T.size - 1 ? "    " : "│   ");
     printf("%s", prefix);
@@ -127,14 +171,20 @@ void list_dir(const char *path, const char *prefix, struct counter *C,
     } else {
       printf("├── ");
     }
-    printf("%s\n", T.names[i]);
-    if (is_dir(full_path)) {
+
+    printf("%s", T.names[i]);
+    if (n != -1) {
+      printf(" -> %s", target);
+    }
+    printf("%s\n", unreadable ? "  [error opening dir]" : "");
+
+    if (dir) {
       C->dirs++;
-      struct args child = A;
-      if (child.max_depth > 0) {
-        child.max_depth--;
+      if (!unreadable) {
+        list_dir(full_path, full_prefix, C, child);
       }
-      list_dir(full_path, full_prefix, C, child);
+    } else if (n != -1 && points_to_dir(full_path)) {
+      C->dirs++;
     } else {
       C->files++;
     }
