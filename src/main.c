@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 struct tree {
   char **names;
@@ -16,6 +17,10 @@ struct tree {
 struct counter {
   int dirs;
   int files;
+};
+
+struct args {
+  int all, dirs_only, max_depth;
 };
 
 int is_dir(const char *path) {
@@ -50,7 +55,13 @@ int compare(const void *a, const void *b) {
   return strcmp(first, second);
 }
 
-void list_dir(const char *path, const char *prefix, struct counter *C) {
+void list_dir(const char *path, const char *prefix, struct counter *C,
+              struct args A) {
+
+  if (A.max_depth == 0) {
+    return;
+  }
+
   DIR *stream = opendir(path);
   if (stream == NULL) {
     fprintf(stderr, "Couldn't open dir %s: %s\n", path, strerror(errno));
@@ -64,7 +75,9 @@ void list_dir(const char *path, const char *prefix, struct counter *C) {
   struct tree T = {NULL, 0, 0};
 
   while (next_dir != NULL) {
-    if (next_dir->d_name[0] == '.') {
+    if (strcmp(next_dir->d_name, ".") == 0 ||
+        strcmp(next_dir->d_name, "..") == 0 ||
+        (A.all == 0 && next_dir->d_name[0] == '.')) {
       next_dir = readdir(stream);
       continue;
     }
@@ -76,6 +89,12 @@ void list_dir(const char *path, const char *prefix, struct counter *C) {
       free(T.names);
       closedir(stream);
       return;
+    }
+
+    snprintf(full_path, sizeof(full_path), "%s/%s", path, next_dir->d_name);
+    if (A.dirs_only && !is_dir(full_path)) {
+      next_dir = readdir(stream);
+      continue;
     }
 
     T.names[T.size] = strdup(next_dir->d_name);
@@ -111,7 +130,11 @@ void list_dir(const char *path, const char *prefix, struct counter *C) {
     printf("%s\n", T.names[i]);
     if (is_dir(full_path)) {
       C->dirs++;
-      list_dir(full_path, full_prefix, C);
+      struct args child = A;
+      if (child.max_depth > 0) {
+        child.max_depth--;
+      }
+      list_dir(full_path, full_prefix, C, child);
     } else {
       C->files++;
     }
@@ -124,11 +147,41 @@ void list_dir(const char *path, const char *prefix, struct counter *C) {
 }
 
 int main(int argc, char **argv) {
-  char *start = argc > 1 ? argv[1] : ".";
+  struct args A = {0, 0, -1};
+  int opt;
+  while ((opt = getopt(argc, argv, "adL:")) != -1) {
+    switch (opt) {
+    case 'a':
+      A.all = 1;
+      break;
+    case 'd':
+      A.dirs_only = 1;
+      break;
+    case 'L': {
+      char *end;
+      long n = strtol(optarg, &end, 10);
+      if (*end != '\0' || n < 1 || n > INT_MAX) {
+        fprintf(stderr, "invalid level: %s\n", optarg);
+        return 1;
+      }
+      A.max_depth = (int)n;
+      break;
+    }
+    default:
+      fprintf(stderr, "usage: %s [-a] [-d] [-L level] [path]\n", argv[0]);
+      return 1;
+    }
+  }
+  const char *start = optind < argc ? argv[optind] : ".";
   struct counter C = {1, 0};
   printf("%s\n", start);
-  list_dir(start, "", &C);
-  printf("\n%d %s, %d %s\n", C.dirs, C.dirs == 1 ? "directory" : "directories",
-         C.files, C.files == 1 ? "file" : "files");
+  list_dir(start, "", &C, A);
+  if (!A.dirs_only) {
+    printf("\n%d %s, %d %s\n", C.dirs,
+           C.dirs == 1 ? "directory" : "directories", C.files,
+           C.files == 1 ? "file" : "files");
+  } else {
+    printf("\n%d %s\n", C.dirs, C.dirs == 1 ? "directory" : "directories");
+  }
   return 0;
 }
